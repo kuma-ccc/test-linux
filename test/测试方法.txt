@@ -1,0 +1,6 @@
+1.在imx6ull上执行./testepoll 1234
+2.新建一个ssh连接执行nc localhost 1234
+3.在ssh连接上输入任意字符，然后回车测试单客户端连接
+4.再新建一个ssh连接执行nc localhost 1234
+5.在ssh连接上输入任意字符，然后回车测试多客户端连接
+6.在ssh连接上输入exit，然后回车测试断开连接

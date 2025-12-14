@@ -111,6 +111,8 @@ int main(int argc, char const *argv[])
     server_addr.sin_family = AF_INET; // ipv4
     server_addr.sin_port = htons(port); // 端口
     server_addr.sin_addr.s_addr = inet_addr(bind_ip.c_str()); // ip
+    int opt = 1;
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));  // 设置端口复用
     if (bind(listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
         perror("bind error");
@@ -147,12 +149,10 @@ int main(int argc, char const *argv[])
     std::map<int, ConnParams*> connManager;
     const int MAX_EVENTS = 1024;
     std::vector<struct epoll_event> events(MAX_EVENTS);
-    printf("main start\n");
+    printf("main start[%d]\n", listen_fd);
     while (g_running)
     {
-        printf("epoll_wait start\n");
         int nfds = epoll_wait(epoll_fd, events.data(), MAX_EVENTS, 1000);
-        printf("epoll_wait %d\n", nfds);
         if (nfds < 0)
         {// 错误
             if (errno == EINTR)
@@ -174,27 +174,35 @@ int main(int argc, char const *argv[])
             {// 有新连接
                 struct sockaddr_in client_addr;
                 socklen_t client_len = sizeof(client_addr);
-                int conn_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &client_len);
-                if (conn_fd < 0)
+                int conn_fd;
+                while (true)
                 {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) // 非阻塞socket
+                    conn_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &client_len);
+                    if (conn_fd < 0)
                     {
-                        continue; 
+                        if (errno == EAGAIN || errno == EWOULDBLOCK) // 非阻塞socket
+                        {
+                            break;; 
+                        }
                     }
+                    setFdNonblocking(conn_fd);
+                    connManager[conn_fd] = new ConnParams(conn_fd);
+                    event.data.fd = conn_fd;
+                    event.events = EPOLLIN | EPOLLET | EPOLLRDHUP; // EPOLLRDHUP 检测对端关闭
+                    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, conn_fd, &event) < 0)
+                    { 
+                        perror("epoll_ctl error");
+                        close(conn_fd);
+                        delete connManager[conn_fd];
+                        connManager.erase(conn_fd);
+                        break;
+                    }
+                    printf("new connection[%d] from %s:%d\n", conn_fd, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+
                 }
-                setFdNonblocking(conn_fd);
-                connManager[conn_fd] = new ConnParams(conn_fd);
-                event.data.fd = conn_fd;
-                event.events = EPOLLIN | EPOLLET | EPOLLRDHUP; // EPOLLRDHUP 检测对端关闭
-                if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, conn_fd, &event) < 0)
-                { 
-                    perror("epoll_ctl error");
-                    close(conn_fd);
-                    delete connManager[conn_fd];
-                    connManager.erase(conn_fd);
-                    continue;
-                }
-                printf("new connection[%d] from %s:%d\n", conn_fd, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+                printf("new connection end\n");
+                continue;
+
             }
             // 处理客户端数据
             // 先 判断错误事件
@@ -302,7 +310,6 @@ int main(int argc, char const *argv[])
                 }
             }
         }
-        sleep(1);
         /* code */
     }
     return 0;
